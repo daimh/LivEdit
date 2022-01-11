@@ -1,0 +1,91 @@
+#!/usr/bin/bash
+#20220104 Manhong Dai
+set -e
+function finish() {
+	for Suffix in $TempFileSuffix
+	do
+		[ ! -f "$Base.$Suffix" ] || rm "$Base.$Suffix"
+	done
+}
+trap finish EXIT
+export TOP_PGID=$(ps --no-headers -o pgid $$ | tr -d ' ')
+function helpme {
+	if [[ "$1" != "" ]]
+	then
+		echo -e "$1" 1>&2
+	else
+		cat /proc/$$/fd/255 | sed -n '/^#HELPME_START/,/^#HELPME_END/p' | grep -v "^#HELPME_" | grep -e "	-\|^#" | grep -- "$(echo $OPT_SHORT | sed -e "s/://g" | sed -e "s/\(.\)/\t-\1 \\\|/g" | sed -e "s/$/^#$COMMAND\t\\\|^#[A-Z]/" )" | sed -e "s/^#$COMMAND\t/\t/; s/^#//" 1>&2
+	fi
+	kill -s TERM -- -$TOP_PGID
+}
+
+OPT_SHORT="hvn"
+OPT_LONG="help,verbose,no-show"
+OPTS=$(getopt -o $OPT_SHORT --long $OPT_LONG -n "$(basename $0)" -- "$@")
+eval set -- "$OPTS"
+while :
+do
+	case "$1" in
+#HELPME_START
+#SYNOPSIS:
+#	livedit [OPTION]... FILE.[tex|md]
+#EXAMPLE:
+#	livedit manual.tex
+#	livedit -n manual.md
+		-h | --help)
+			helpme ;;
+		-v | --verbose)	#optional, verbose
+			set -x
+			shift ;;
+		-n | --no-show)	#optional, do not use evince/firefox to open the result
+			ShowIt=NO
+			shift ;;
+		--)
+			shift 1 ;;
+		*)
+			break ;;
+#HELPME_END
+	esac
+done
+[ $(echo "$1" | wc -w) = "1" ] || helpme "ERR-001: space in file name is not suppoted."
+if [[ "$1" =~ .*\.md ]] 
+then
+	Base=${1:0:-3}
+	InFormat=md
+	OutFormat=html
+	ShowCmd=firefox
+	RefreshCmd="markdown -f toc -o $Base.html"
+elif [[ "$1" =~ .*\.tex ]] 
+then
+	Base=${1:0:-4}
+	InFormat=tex
+	OutFormat=pdf
+	ShowCmd=evince
+	RefreshCmd="pdflatex --enable-write18"
+	TempFileSuffix="aux log out toc"
+else
+	helpme "ERR-002: $1 is neither .md nor .tex"
+fi
+[ -n "$Base" ] || helpme "ERR-003: wrong file"
+tput setaf 1 
+echo "Ctrl+C to quit"
+tput sgr0
+while :
+do
+	if [ ! -f "$Base.$OutFormat" ] || [ "$1" -nt "$Base.$OutFormat" ] 
+	then
+		$RefreshCmd "$1" < /dev/null || :
+		RTN=$?
+		tput setaf 1 
+		echo -n "[$(date)]: \"$Base.$OutFormat\" "
+		[ $? -eq 0 ] && echo refreshed || echo failed
+		tput sgr0
+	fi
+	if [ "$ShowIt" != "NO" ] 
+	then
+		[ -f "$Base.$OutFormat" ] || helpme "ERR-004: failed to generate the $OutFormat file"
+		$ShowCmd "$Base.$OutFormat" &
+		ShowIt=NO
+	fi
+	inotifywait -qqe DELETE_SELF "$1"
+done
