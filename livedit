@@ -62,7 +62,7 @@ then
 	OutFormat=pdf
 	ShowCmd=evince
 	RefreshCmd="pdflatex --enable-write18"
-	TempFileSuffix="aux log out toc"
+	TempFileSuffix="aux log nav out snm toc"
 else
 	helpme "ERR-002: $1 is neither .md nor .tex"
 fi
@@ -74,11 +74,14 @@ while :
 do
 	if [ ! -f "$Base.$OutFormat" ] || [ "$1" -nt "$Base.$OutFormat" ] 
 	then
-		$RefreshCmd "$1" < /dev/null || :
-		RTN=$?
+		if $RefreshCmd "$1" < /dev/null 
+		then
+			RTN=refreshed
+		else
+			RTN=failed
+		fi
 		tput setaf 1 
-		echo -n "[$(date)]: \"$Base.$OutFormat\" "
-		[ $? -eq 0 ] && echo refreshed || echo failed
+		echo "[$(date)]: \"$Base.$OutFormat\" $RTN"
 		tput sgr0
 	fi
 	if [ "$ShowIt" != "NO" ] 
