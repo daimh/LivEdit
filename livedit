@@ -62,7 +62,7 @@ then
 	OutFormat=pdf
 	ShowCmd=evince
 	RefreshCmd="pdflatex --enable-write18"
-	TempFileSuffix="aux log nav out snm toc"
+	TempFileSuffix="aux log nav out snm toc vrb"
 else
 	helpme "ERR-002: $1 is neither .md nor .tex"
 fi
