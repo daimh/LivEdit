@@ -1,6 +1,91 @@
 #!/usr/bin/bash
-#20220104 Manhong Dai
-set -e
+set -fEeuo pipefail
+function die { #20250208
+	if [ $# -gt 0 ]
+	then
+		echo -e "$1" 1>&2
+	else
+		grep '#' /proc/$$/fd/255 \
+			| sed -n '/^#@ HELP_START/,/^#@ HELP_END/p' \
+			| grep -v "^#@ HELP_" \
+			| sed "s/#@//; s/ \+/ /; s/\t\+/\t/; s/^ //"
+	fi
+	exit 1
+}
+
+OutFormat=""
+TempFileSuffix=""
+OPT_SHORT="hvo:"
+OPT_LONG="help,version,verbose,output-file-suffix:"
+OPTS=$(getopt -o $OPT_SHORT --long $OPT_LONG -n "$(basename $0)" -- "$@")
+eval set -- "$OPTS"
+while :
+do
+	case "$1" in
+#@ HELP_START
+#@ SYNOPSIS:
+#@ 	livedit [OPTION]... FILE.[tex|md]
+#@ EXAMPLE:
+#@ 	livedit manual.tex
+#@ 	livedit todotree.md
+#@ 	livedit -o html todotree.md
+		-h | --help)
+			die ;;
+		--version) #@ display version and exit
+			die 20250322 ;;
+		-v | --verbose)	#@ verbose
+			set -x
+			shift ;;
+		-o | --output-file-suffix)	#@ 'html/term' (term by default) 
+				#@ if input is .md; or 'pdf' if input is .tex
+			OutFormat=$2
+			shift 2 ;;
+		--)
+			shift ;;
+		*)
+			break ;;
+#@ HELP_END
+	esac
+done
+[ $(echo "$1" | wc -w) = "1" ] \
+	|| die "ERR-001: space in file name is not suppoted."
+if [[ "$1" =~ .*\.md ]]
+then
+	InFormat=md
+	[ $OutFormat != "" ] || OutFormat=term
+	Base=${1:0:-3}
+	if [ "$OutFormat" = term ]
+	then
+		ShowCmd=""
+		RefreshCmd="todotree -i $Base.md -o term"
+		TempFileSuffix=""
+	elif [ "$OutFormat" = html ]
+	then
+		ShowCmd=firefox
+		RefreshCmd="markdown -f toc -o $Base.html $1"
+		TempFileSuffix=html
+	else
+		die "ERR-005: use '-o html' or '-o term' for markdown file"
+	fi
+elif [[ "$1" =~ .*\.tex ]]
+then
+	if [ "$OutFormat" = "" ]
+	then
+		OutFormat=pdf
+	elif [ "$OutFormat" != pdf ]
+	then
+		die "ERR-006: '-o' is not needed for tex"
+	fi
+	Base=${1:0:-4}
+	InFormat=tex
+	OutFormat=pdf
+	ShowCmd=evince
+	RefreshCmd="pdflatex --enable-write18 $Base.tex"
+	TempFileSuffix="aux log nav out snm toc vrb"
+else
+	die "ERR-002: $1 is neither .md nor .tex"
+fi
+
 function finish() {
 	for Suffix in $TempFileSuffix
 	do
@@ -8,87 +93,35 @@ function finish() {
 	done
 }
 trap finish EXIT
-export TOP_PGID=$(ps --no-headers -o pgid $$ | tr -d ' ')
-function helpme {
-	if [[ "$1" != "" ]]
-	then
-		echo -e "$1" 1>&2
-	else
-		cat /proc/$$/fd/255 | sed -n '/^#HELPME_START/,/^#HELPME_END/p' | grep -v "^#HELPME_" | grep -e "	-\|^#" | grep -- "$(echo $OPT_SHORT | sed -e "s/://g" | sed -e "s/\(.\)/\t-\1 \\\|/g" | sed -e "s/$/^#$COMMAND\t\\\|^#[A-Z]/" )" | sed -e "s/^#$COMMAND\t/\t/; s/^#//" 1>&2
-	fi
-	kill -s TERM -- -$TOP_PGID
-}
 
-OPT_SHORT="hvn"
-OPT_LONG="help,verbose,no-show"
-OPTS=$(getopt -o $OPT_SHORT --long $OPT_LONG -n "$(basename $0)" -- "$@")
-eval set -- "$OPTS"
-while :
-do
-	case "$1" in
-#HELPME_START
-#SYNOPSIS:
-#	livedit [OPTION]... FILE.[tex|md]
-#EXAMPLE:
-#	livedit manual.tex
-#	livedit -n manual.md
-		-h | --help)
-			helpme ;;
-		-v | --verbose)	#optional, verbose
-			set -x
-			shift ;;
-		-n | --no-show)	#optional, do not use evince/firefox to open the result
-			ShowIt=NO
-			shift ;;
-		--)
-			shift 1 ;;
-		*)
-			break ;;
-#HELPME_END
-	esac
-done
-[ $(echo "$1" | wc -w) = "1" ] || helpme "ERR-001: space in file name is not suppoted."
-if [[ "$1" =~ .*\.md ]] 
-then
-	Base=${1:0:-3}
-	InFormat=md
-	OutFormat=html
-	ShowCmd=firefox
-	RefreshCmd="markdown -f toc -o $Base.html"
-elif [[ "$1" =~ .*\.tex ]] 
-then
-	Base=${1:0:-4}
-	InFormat=tex
-	OutFormat=pdf
-	ShowCmd=evince
-	RefreshCmd="pdflatex --enable-write18"
-	TempFileSuffix="aux log nav out snm toc vrb"
-else
-	helpme "ERR-002: $1 is neither .md nor .tex"
-fi
-[ -n "$Base" ] || helpme "ERR-003: wrong file"
-tput setaf 1 
+[ -n "$Base" ] || die "ERR-003: wrong file"
+tput setaf 2
 echo "Ctrl+C to quit"
 tput sgr0
+# pdflatex toc require it twice
+[ "$OutFormat" != "pdf" ] \
+	|| bash -c "$RefreshCmd" < /dev/null > /dev/null
+ShowProcess=""
 while :
 do
-	if [ ! -f "$Base.$OutFormat" ] || [ "$1" -nt "$Base.$OutFormat" ] 
+	if bash -c "$RefreshCmd" < /dev/null
 	then
-		if $RefreshCmd "$1" < /dev/null 
-		then
-			RTN=refreshed
-		else
-			RTN=failed
-		fi
-		tput setaf 1 
-		echo "[$(date)]: \"$Base.$OutFormat\" $RTN"
-		tput sgr0
+		RTN=refreshed
+	else
+		RTN=failed
 	fi
-	if [ "$ShowIt" != "NO" ] 
+	tput setaf 2
+	echo "[$(date)]: \"$Base.$InFormat\" $RTN"
+	tput sgr0
+	if [ "$OutFormat" != "term" ]
 	then
-		[ -f "$Base.$OutFormat" ] || helpme "ERR-004: failed to generate the $OutFormat file"
-		$ShowCmd "$Base.$OutFormat" &
-		ShowIt=NO
+		[ -f "$Base.$OutFormat" ] \
+			|| die "ERR-004: failed to generate the $OutFormat file"
+		if [ "$ShowProcess" = "" ]
+		then
+			$ShowCmd "$Base.$OutFormat" &
+			ShowProcess=$!
+		fi
 	fi
 	inotifywait -qqe DELETE_SELF "$1"
 done
